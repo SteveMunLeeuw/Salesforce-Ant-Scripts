@@ -1,0 +1,197 @@
+<project name="Retrieve and Deploy SFDC metadata" default="deployEmptyCheckOnly" basedir=".." 
+	xmlns:sf="antlib:com.salesforce"
+	xmlns:c="antlib:net.sf.antcontrib"
+	>
+	
+    <taskdef uri="antlib:com.salesforce"
+        resource="com/salesforce/antlib.xml"
+        classpath="${basedir}/build/ant-salesforce.jar"/>
+    <taskdef uri="antlib:net.sf.antcontrib"
+        resource="net/sf/antcontrib/antlib.xml"
+        classpath="${basedir}/build/ant-contrib-1.0b3.jar"/>
+		
+
+    <property file="${basedir}/build/build.properties"/>
+    <property environment="env"/>
+
+	<target name="pullEverything" depends="describeMetadata">
+		<c:trycatch>
+			<c:try>
+				<copy file="${srcPath}package.xml" tofile="${srcPath}../tempPackage.xml" force="true"/>
+				<delete>
+					<fileset dir="${srcPath}" includes="*"/>
+				</delete>
+			</c:try>
+			<c:catch>
+			</c:catch>
+		</c:trycatch>
+		<mkdir dir="${srcPath}"/>
+		<antcall target="readMetadata">
+		</antcall>
+		<sleep seconds="6"/>
+		<echo message="copy back...from: ${srcPath}../tempPackage.xml to: ${srcPath}package.xml"></echo>
+		<delete file="${srcPath}package.xml"/>
+		<copy file="${srcPath}../tempPackage.xml" tofile="${srcPath}package.xml" force="true"/>
+	</target>
+	
+	<target name="readMetadata">
+		<loadfile property="metadataTypes" srcFile="${metadataTypesFilePath}"/>
+		<c:for list="${metadataTypes}" param="inputLine" delimiter="${line.separator}">
+			<c:sequential>
+				<c:if>
+				<matches string="@{inputLine}" pattern="XMLName:"/>
+					<c:then>
+						<c:propertyregex property="XMLName"
+							input="@{inputLine}"
+							regexp="XMLName: "
+							replace=""
+							override="true"/>
+						<!--<echo message="${XMLName}"/>-->
+					</c:then>
+				</c:if>
+				<c:if>
+				<matches string="@{inputLine}" pattern="DirName:"/>
+					<c:then>
+						<c:propertyregex property="DirName"
+							input="@{inputLine}"
+							regexp="DirName: "
+							replace=""
+							override="true"/>
+					</c:then>
+				</c:if>
+				<c:if>
+				<matches string="@{inputLine}" pattern="InFolder:"/>
+					<c:then>
+						<c:propertyregex property="InFolder"
+							input="@{inputLine}"
+							regexp="InFolder: "
+							replace=""
+							override="true"/>
+						<!--<echo message="${XMLName} / ${DirName} / ${InFolder}"/>-->
+						<antcall target="bulkOrFolder">
+						</antcall>
+					</c:then>
+				</c:if>
+			</c:sequential>
+		</c:for>
+	</target>
+
+	<target name="bulkOrFolder">
+		<c:if>
+			<c:or>
+				<!--<c:equals arg1="${XMLName}" arg2="EmailTemplate"/>-->
+			</c:or>
+			<c:then>
+				<echo level="info">retrieving list for EmailTemplate</echo>
+				<echo level="info">${basedir}/data/${XMLName}.log</echo>
+			</c:then>
+			<c:else>
+				<c:if>
+					<c:or>
+						<c:equals arg1="${InFolder}" arg2="true"/>
+						<!--<c:equals arg1="${XMLName}" arg2="EmailTemplate"/>-->
+						<!--<c:equals arg1="${XMLName}" arg2="Document"/>-->
+					</c:or>
+					<c:then>
+						<antcall target="getFolder">
+						</antcall>
+					</c:then>
+					<c:else>
+						<sf:bulkRetrieve
+							username="${sfdc.username}"
+							password="${sfdc.password}"
+							serverurl="${sfdc.serverurl}"
+							metadataType="${XMLName}"
+							retrieveTarget="${srcPath}"
+							/>
+						<copy file="${srcPath}package.xml" tofile="${srcPath}${XMLName}-Package.xml" force="true"/>
+					</c:else>
+				</c:if>
+			</c:else>
+		</c:if>
+	</target>
+	
+	<target name="getFolder">
+		<!--EmailTemplate doesn't follow the convention like the other folders-->
+		<property name="folders" value="${XMLName}"/>
+		<echo>${XMLName}</echo>
+		<c:propertyregex property="folders"
+			input="${XMLName}"
+			regexp="EmailTemplate"
+			replace="Email"
+			override="true"/>
+		<sf:listMetadata
+			username="${sfdc.username}"
+			password="${sfdc.password}"
+			serverurl="${sfdc.serverurl}"
+			metadataType="${folders}Folder"
+			resultFilePath="${basedir}/data/${folders}.log"
+			/>
+		<loadfile property="logfile" srcFile="${basedir}/data/${folders}.log" failonerror="false"/>
+		<c:for list="${logfile}" param="inputLine" delimiter="${line.separator}">
+			<c:sequential>
+				<c:if>
+				<matches string="@{inputLine}" pattern="FileName:"/>
+					<c:then>
+						<c:propertyregex property="folder"
+							input="@{inputLine}"
+							regexp="FileName: "
+							replace=""
+							override="true"/>
+						<echo/>
+						<echo message="inputLine: @{inputLine}"/>
+						<echo message="folder: ${folder}"/>
+						<c:propertyregex property="folder"
+							input="${folder}"
+							regexp="email/"
+							replace=""
+							override="true"/>
+						<c:propertyregex property="folder"
+							input="${folder}"
+							regexp="documents/"
+							replace=""
+							override="true"/>
+						<c:propertyregex property="folder"
+							input="${folder}"
+							regexp="workflows/"
+							replace=""
+							override="true"/>
+						<sf:listMetadata
+							username="${sfdc.username}"
+							password="${sfdc.password}"
+							serverurl="${sfdc.serverurl}"
+							metadataType="${XMLName}"
+							folder="${folder}"
+							resultFilePath="${basedir}/data/${folder}.list.txt"
+							/>
+						<sf:bulkRetrieve
+							username="${sfdc.username}"
+							password="${sfdc.password}"
+							serverurl="${sfdc.serverurl}"
+							metadataType="${XMLName}"
+							retrieveTarget="${srcPath}"
+							containingFolder="${folder}"
+							/>
+						<copy file="${srcPath}package.xml" tofile="${srcPath}${XMLName}-list-Package.xml" force="true"/>
+					</c:then>
+				</c:if>
+			</c:sequential>
+		</c:for>
+	</target>
+
+    <target name="describeMetadata">
+		<mkdir dir="${basedir}/data"/>
+		<echo message="pulling to: ${metadataTypesFilePath}"/>
+		<sf:describeMetadata 
+			username="${sfdc.username}" 
+			password="${sfdc.password}" 
+			serverurl="${sfdc.serverurl}" 
+			resultFilePath="${metadataTypesFilePath}"/>
+    </target>
+	
+	<target name="dir.check">
+		<condition property="dir.exists">
+			<available file="src/${DirName}" type="dir"/>
+		</condition>
+	</target>
+</project>
